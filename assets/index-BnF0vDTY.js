@@ -230,6 +230,7 @@ function tick() {
   lastCheck = Date.now();
   if (!Bangle.isLocked()) render();
 }
+function wake() { render(); setTimeout(render, 200); }   // draw now + after the LCD settles (fixes blank-on-wake)
 function startTick() { if (!iv) iv = setInterval(tick, 30000); }
 function stopTick()  { if (iv) { clearInterval(iv); iv = null; } }
 
@@ -248,7 +249,8 @@ try {
       else           page = (page + 1) % 4;                  // RIGHT -> next page
       render();
     });
-    Bangle.on("lock", function(on){ if (on) stopTick(); else { page = 0; flipped = false; render(); startTick(); } }); // wake -> clock
+    Bangle.on("lock", function(on){ if (on) stopTick(); else { page = 0; flipped = false; wake(); startTick(); } }); // wake -> clock
+    Bangle.on("lcdPower", function(on){ if (on) wake(); });   // redraw when the display actually powers on
     startTick();
   }
   g.reset(); render();
