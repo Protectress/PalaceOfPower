@@ -123,66 +123,68 @@ function drawGraph() {
 }
 
 // ── page 1: schedule / events ────────────────────────────────────────
-var _evCache = null, _evT = 0;
-function scheduleEvents() {
-  var now = Date.now();
-  if (_evCache && now - _evT < 20000) return _evCache;            // rebuild at most every 20s (memory + speed)
-  var cd = cycleDayNow(), idx = cycleIdxNow(), CL = D.cycleLen || 29.5, base = [], i;
-  var pcs = D.pieces || [], sgl = D.singles || [], sites = D.sites || [], slots = D.slots || { rows:[], warm:[], start:0 };
-  function push(day, timeStr, ev) {
-    var abs = day + timeOffset(timeStr);
-    var d = ((abs % CL) + CL) % CL;
-    ev.delta = (d - cd + CL) % CL;
-    ev.cyc = idx + (d < cd ? 1 : 0);
-    ev.tod = ((abs % 1) + 1) % 1;          // fractional day = time-of-day for display
-    ev.vague = !isSpecific(timeStr);
-    base.push(ev);
-  }
-  for (i = 0; i < pcs.length; i++) {
-    var p = pcs[i];
-    push(p.day,          p.time, { kind:"on",  med:p.med, pieceIdx:p.order, size:p.sizeStr });
-    push(p.day + p.wear, p.time, { kind:"off", med:p.med, pieceIdx:p.order, size:p.sizeStr });
-  }
-  for (i = 0; i < sgl.length; i++) {
-    var s = sgl[i];
-    push(s.day, s.time, { kind:"take", med:s.med, pieceIdx:-1, dose:s.dose, route:s.route });
-  }
-  base.sort(function(a,b){ return a.delta - b.delta; });
-  for (i = 0; i < base.length; i++) {
-    var o = base[i];
-    if (o.kind === "take") { o.site = ""; }
-    else { var slot = slotFromTable(slots, o.cyc, o.pieceIdx);
-           o.site = (slot >= 0 && sites[slot]) ? sites[slot] : ""; }
-    o.at = now + o.delta * 86400000;
-  }
-  _evCache = base; _evT = now;
-  return base;
+// ── page 1: schedule / events — built ONCE, then only re-sorted (no per-render allocation) ──
+function _norm(v, CL) { v = v % CL; return v < 0 ? v + CL : v; }
+function _frac(v) { v = v % 1; return v < 0 ? v + 1 : v; }
+var EVENTS = null;                          // static event list (schedule doesn't change on the watch)
+function buildEvents() {
+  var out = [];
+  try {
+    var CL = (D && D.cycleLen) || 29.5;
+    var pcs = (D && D.pieces) || [], sgl = (D && D.singles) || [], i, p, s, off;
+    for (i = 0; i < pcs.length; i++) {
+      p = pcs[i]; off = timeOffset(p.time);
+      out.push({ base:_norm((+p.day) + off, CL),             tod:_frac((+p.day) + off),             kind:"on",  med:p.med, size:p.sizeStr, pieceIdx:p.order, vague:!isSpecific(p.time) });
+      out.push({ base:_norm((+p.day) + (+p.wear) + off, CL), tod:_frac((+p.day) + (+p.wear) + off), kind:"off", med:p.med, size:p.sizeStr, pieceIdx:p.order, vague:!isSpecific(p.time) });
+    }
+    for (i = 0; i < sgl.length; i++) {
+      s = sgl[i]; off = timeOffset(s.time);
+      out.push({ base:_norm((+s.day) + off, CL), tod:_frac((+s.day) + off), kind:"take", med:s.med, dose:s.dose, route:s.route, pieceIdx:-1, vague:!isSpecific(s.time) });
+    }
+  } catch (e) { return []; }
+  return out;
 }
-function upcomingEvents(limit) { return scheduleEvents().slice(0, limit); }
+function scheduleRows() {
+  if (!EVENTS) EVENTS = buildEvents();
+  var CL = (D && D.cycleLen) || 29.5, cd = cycleDayNow(), i;
+  if (!isFinite(cd)) cd = 0;
+  for (i = 0; i < EVENTS.length; i++) EVENTS[i].delta = _norm(EVENTS[i].base - cd, CL);
+  EVENTS.sort(function (a, b) { return a.delta - b.delta; });
+  return EVENTS;
+}
+function siteFor(e) {
+  if (!e || e.kind === "take" || e.pieceIdx < 0) return "";
+  try {
+    var cd = cycleDayNow(), idx = cycleIdxNow() + (e.base < cd ? 1 : 0);
+    var slot = slotFromTable(D.slots || { rows:[], warm:[], start:0 }, idx, e.pieceIdx);
+    var sites = D.sites || [];
+    return (slot >= 0 && sites[slot]) ? sites[slot] : "";
+  } catch (e2) { return ""; }
+}
+function upcomingEvents(limit) { return scheduleRows().slice(0, limit); }
 
 function drawUpcoming() {
   slimHeader();
-  var all = scheduleEvents(), CL = D.cycleLen, i;
-  g.setColor(TH.accent).setFont("6x8",1).setFontAlign(-1,-1).drawString("SCHEDULE", 4, 18);
-  if (!all.length) { g.setColor(TH.fg).setFontAlign(0,0).drawString("no doses scheduled", 88, 100); return; }
-  var rows = [], last = all[all.length-1];
-  if (last && last.delta > CL - 1.5) { last._past = true; rows.push(last); }
-  for (i = 0; i < all.length && rows.length < 4; i++) { all[i]._past = false; rows.push(all[i]); }
+  g.setColor(TH.accent).setFont("6x8", 1).setFontAlign(-1, -1).drawString("SCHEDULE", 4, 18);
+  var rows = null;
+  try { rows = scheduleRows(); } catch (e) { rows = null; }
+  if (!rows || !rows.length) { g.setColor(TH.fg).setFont("6x8", 1).setFontAlign(0, 0).drawString("no doses scheduled", 88, 100); return; }
+  var CL = (D && D.cycleLen) || 29.5, show = [], i, past = rows[rows.length - 1];
+  if (past && past.delta > CL - 2) { past._past = true; show.push(past); }
+  for (i = 0; i < rows.length && show.length < 4; i++) { if (rows[i] === past) continue; rows[i]._past = false; show.push(rows[i]); }
   var y0 = 34, rh = 33, hlDone = false;
-  for (i = 0; i < rows.length; i++) {
-    var e = rows[i], ry = y0 + i*rh;
+  for (i = 0; i < show.length; i++) {
+    var e = show[i], ry = y0 + i * rh;
     var isNext = !e._past && !hlDone; if (isNext) hlDone = true;
-    if (isNext) { g.setColor(TH.accent).fillRect(2, ry-2, 174, ry+rh-7); g.setColor("#000000"); }
+    if (isNext) { g.setColor(TH.accent).fillRect(2, ry - 2, 174, ry + rh - 7); g.setColor("#000000"); }
     else g.setColor(TH.fg);
-    var act = e.kind === "take" ? (e.dose + " mg")
-            : e.kind === "on"   ? ("on " + (e.size || ""))
-            :                     "off";
+    var act = e.kind === "take" ? ((e.dose || 0) + " mg") : e.kind === "on" ? ("on " + (e.size || "")) : "off";
     var when = e._past ? "done" : (e.vague ? (e.tod < 0.5 ? "AM" : "PM") : fmtClock(e.tod));
-    g.setFont("6x8",2).setFontAlign(-1,-1).drawString(when + "  " + act, 6, ry);
+    g.setFont("6x8", 2).setFontAlign(-1, -1).drawString(when + "  " + act, 6, ry);
     if (!isNext) g.setColor(e._past ? TH.fg : TH.p4);
-    var extra = e.kind === "take" ? (e.route || "") : (e.site || "");
-    var sub = e.med + (extra ? " " + extra : "");
-    g.setFont("6x8",1).setFontAlign(-1,-1).drawString(sub.substr(0,28), 6, ry+16);
+    var extra = e.kind === "take" ? (e.route || "") : siteFor(e);
+    var sub = ("" + (e.med || "")) + (extra ? " " + extra : "");
+    g.setFont("6x8", 1).setFontAlign(-1, -1).drawString(sub.substr(0, 28), 6, ry + 16);
   }
 }
 
@@ -263,11 +265,12 @@ var iv = null, bootedAt = Date.now(), _lastFire = "", _lastStepDraw = 0;
 function checkDue() {
   var n = upcomingEvents(1)[0];
   if (!n) return;
-  var key = n.med + n.kind + Math.round(n.at / 60000);
-  if (Math.abs(n.at - Date.now()) < 45000 && key !== _lastFire) {   // within ~45s of the dose time, once
+  var at = Date.now() + n.delta * 86400000;
+  var key = n.med + n.kind + Math.round(at / 60000);
+  if (n.delta * 86400000 < 60000 && key !== _lastFire) {   // within ~1 min before the dose, once
     _lastFire = key;
     buzzFor(n.kind);
-    if (page !== 1) alertEv = n;
+    if (page !== 1) { n.at = at; n.site = siteFor(n); alertEv = n; }
   }
 }
 function tick() { try { checkDue(); } catch (e) {} if (!Bangle.isLocked()) render(); }
@@ -293,7 +296,7 @@ try {
     });
     Bangle.on("lock", function(on){                              // wake -> clock, refresh steps
       if (on) { stopTick(); return; }
-      page = 0; flipped = false; _stT = 0; _evT = 0; render(); startTick();
+      page = 0; flipped = false; _stT = 0; render(); startTick();
     });
     Bangle.on("step", function(){                                // live steps while walking — even when locked (v2 screen is always on)
       var t = Date.now();
@@ -305,6 +308,8 @@ try {
     startTick();
   }
   g.reset(); render();
+  setTimeout(render, 400);    // re-apply the base 180 flip after clock-mode init settles
+  setTimeout(render, 1200);
 } catch (e) {
   showErr("init error:", e);
 }
