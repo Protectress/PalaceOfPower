@@ -244,17 +244,16 @@ function drawHints() {
 // ── shell ────────────────────────────────────────────────────────────
 function render() {
   try {
-    if (alertEv && page !== 1) { drawAlert(alertEv); return; }   // dose card, except on the schedule page
-    var cf = (page === 2 || page === 3);
-    g.setRotation(0);                                            // known state, then apply flip
-    if (flipped && cf) g.setRotation(2);
+    var rot = flipped ? 2 : 0;                                   // flip applies to EVERY page
+    if (alertEv && page !== 1) { drawAlert(alertEv); return; }
+    g.setRotation(rot);
     g.clear(); fillBg();
     if (!D) { g.setColor("#ffffff").setFont("6x8",2).setFontAlign(0,0).drawString("no schedule\\ntransferred", 88, 88); return; }
     if (page === 0) drawClock();
     else if (page === 1) drawUpcoming();
     else if (page === 2) drawSolar();
     else drawGraph();
-    g.setRotation(0); drawHints();
+    g.setRotation(rot); drawHints();
   } catch (e) { showErr("draw error:", e); }
 }
 
