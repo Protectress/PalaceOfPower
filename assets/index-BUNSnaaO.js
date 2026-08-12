@@ -17,7 +17,14 @@ var D = require("Storage").readJSON("pkpower.json", 1) || null;
 
 // Ruby-red theme: red background, everything else chosen to contrast on red.
 var TH = D ? D.theme : { bg:"#000000", e2:"#ff00ff", p4:"#00ffff", fg:"#ffffff", accent:"#ffff00" };
-var BASE_ROT = 2;   // 2 = worn with the button on the opposite side (whole app rotated 180). set 0 for normal wear.
+// Whole-app 180 flip so the watch can be worn with the button on the OTHER side.
+// g.setRotation under clock mode flips only my touch math, NOT the display, so flip at the
+// LCD controller (reliable, forum-proven) and remap touch in software to match.
+var BASE_FLIP = true;   // true = worn button-on-other-side (display upside down). false = normal wear.
+var _curFlip = null;
+function lcdFlip(on){ try { Bangle.lcdWr(0x36, on ? 0xC0 : 0x00); } catch(e){} }
+function effFlip(){ var cf=(page===2||page===3); var e=BASE_FLIP; if (flipped && cf) e=!e; return e; }
+function applyFlip(){ var e=effFlip(); if (e!==_curFlip){ lcdFlip(e); _curFlip=e; } return e; }
 
 function slotFromTable(tbl, cycle, pieceIdx) {
   if (pieceIdx < 0) return -1;
@@ -62,7 +69,7 @@ var MONS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","D
 var DAYS = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 
 function showErr(prefix, e) {
-  g.setRotation(BASE_ROT); g.clear();
+  g.setRotation(0); g.clear();
   g.setColor("#ffffff").setFont("6x8",1).setFontAlign(-1,-1);
   var m = (e && e.message) ? e.message : (""+e), lines=[prefix], i;
   for (i=0;i<m.length;i+=28) lines.push(m.substr(i,28));
@@ -210,8 +217,8 @@ function drawSolar() {
 }
 
 // ── dose alert (Bangle.js 2 has no speaker, so: buzz + a tappable card) ─
-function drawAlert(e, rot) {
-  g.setRotation(rot===undefined?BASE_ROT:rot); g.clear(); fillBg();
+function drawAlert(e) {
+  g.setRotation(0); g.clear(); fillBg();
   g.setColor(TH.fg).setFontAlign(0,0);
   var tm = e.vague ? (e.tod<0.5?"AM":"PM") : fmtClock(e.tod);
   g.setFont("6x8",1).drawString(tm, 88, 22);
@@ -279,9 +286,9 @@ try {
       if (Date.now() - lastTap < 90) return;
       lastTap = Date.now();
       var cf = (page === 2 || page === 3);
-      var rot = BASE_ROT; if (flipped && cf) rot ^= 2;
+      var e = BASE_FLIP; if (flipped && cf) e = !e;
       var x = xy.x, y = xy.y;
-      if (rot === 2) { x = 176 - x; y = 176 - y; }               // physical tap -> rotated logical frame
+      if (e) { x = 176 - x; y = 176 - y; }                       // physical tap -> flipped logical frame
       if (alertEv) { alertEv = null; render(); return; }         // any tap dismisses the dose card
       if (flipped) { flipped = false; render(); return; }
       if (cf && y > 130) { flipped = true; render(); return; }
