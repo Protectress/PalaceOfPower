@@ -52,11 +52,9 @@ function stepsCached() { var t = Date.now(); if (!_stT || t - _stT > 2000) { _st
 var _batV = 100, _batT = 0;
 function battery() { var t = Date.now(); if (!_batT || t - _batT > 30000) { try { _batV = Bangle.getBattery(); } catch (e) { try { _batV = E.getBattery(); } catch (e2) {} } _batT = t; } return _batV; }
 function tLabel(ts) { if (ts === "am") return "AM"; if (ts === "pm") return "PM"; return "" + (ts || ""); }
-function minsOf(time) {
-  if (!time) return 0;
-  if (time === "am") return 8*60; if (time === "pm") return 20*60;
-  var m = (""+time).match(/(\\d+):(\\d+)/); return m ? (+m[1]*60 + +m[2]) : 0;
-}
+function timeOffset(t) { if (!t || t === "am") return 0; if (t === "pm") return 0.5; var p = (""+t).split(":"); return ((+p[0]||0) + (+p[1]||0)/60) / 24; }
+function isSpecific(t) { return !!(t && (""+t).indexOf(":") >= 0); }
+function fmtClock(fr) { var mins = ((Math.round(fr*1440) % 1440) + 1440) % 1440, h = (mins/60)|0, m = mins%60, ap = h<12?"am":"pm", h12 = h%12===0?12:h%12; return h12 + ":" + two(m) + ap; }
 
 var page = 0, flipped = false, alertEv = null;
 var MONS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
@@ -70,6 +68,10 @@ function showErr(prefix, e) {
   g.drawString(lines.join("\\n"), 4, 28);
 }
 
+function fillBg() {
+  g.setColor(TH.bg); g.fillRect(0,0,175,175);
+  g.setColor("#000000"); for (var y=1; y<176; y+=2) g.drawLine(0,y,175,y);   // scanline dither -> deeper red
+}
 function slimHeader() {
   var t = new Date();
   g.setColor(TH.fg).setFont("6x8",1).setFontAlign(-1,-1);
@@ -102,11 +104,9 @@ function drawGraph() {
   g.setColor(TH.p4).setFontAlign(1,-1).drawString("P4 "+Math.round(c.p4max), pR, 24);
   var cd = cycleDayNow(), mi = Math.round((cd/D.cycleLen)*(n-1)); if(mi<0)mi=0; if(mi>n-1)mi=n-1;
   var tx = xOf(mi);
-  // E2 filled area (black) from baseline up to the curve
-  var poly = [pL, pB];
-  for (i=0;i<n;i++){ poly.push(xOf(i)); poly.push(yE(c.e2[i])); }
-  poly.push(pR, pB);
-  g.setColor(TH.e2).fillPoly(poly);
+  // E2 filled area (black) — vertical columns (reliable; a 150-pt fillPoly hung the render)
+  g.setColor(TH.e2);
+  for (i=0;i<n;i++){ var xx=Math.round(xOf(i)); g.fillRect(xx, Math.round(yE(c.e2[i])), xx+1, pB); }
   // you-are-here marker
   g.setColor(TH.accent); for (var yy=pT; yy<pB; yy+=4) g.fillRect(tx, yy, tx, yy+1);
   // P4 line (yellow, 2px) ON TOP so it stays fully visible over the fill
@@ -125,10 +125,12 @@ function drawGraph() {
 function scheduleEvents() {
   var cd = cycleDayNow(), idx = cycleIdxNow(), CL = D.cycleLen, base = [], i;
   function push(day, timeStr, ev) {
-    var d = (((day + minsOf(timeStr)/1440) % CL) + CL) % CL;
+    var abs = day + timeOffset(timeStr);
+    var d = ((abs % CL) + CL) % CL;
     ev.delta = (d - cd + CL) % CL;
     ev.cyc = idx + (d < cd ? 1 : 0);
-    ev.timeStr = timeStr;
+    ev.tod = ((abs % 1) + 1) % 1;          // fractional day = time-of-day for display
+    ev.vague = !isSpecific(timeStr);
     base.push(ev);
   }
   for (i = 0; i < D.pieces.length; i++) {
@@ -169,7 +171,7 @@ function drawUpcoming() {
     var act = e.kind === "take" ? (e.dose + " mg")
             : e.kind === "on"   ? ("on " + (e.size || ""))
             :                     "off";
-    var when = e._past ? "done" : tLabel(e.timeStr);
+    var when = e._past ? "done" : (e.vague ? (e.tod < 0.5 ? "AM" : "PM") : fmtClock(e.tod));
     g.setFont("6x8",2).setFontAlign(-1,-1).drawString(when + "  " + act, 6, ry);
     if (!isNext) g.setColor(e._past ? TH.fg : TH.p4);
     var extra = e.kind === "take" ? (e.route || "") : (e.site || "");
@@ -206,8 +208,10 @@ function drawSolar() {
 
 // ── dose alert (Bangle.js 2 has no speaker, so: buzz + a tappable card) ─
 function drawAlert(e) {
-  g.setRotation(0); g.clear(); g.setColor(TH.bg).fillRect(0,0,176,176);
+  g.setRotation(0); g.clear(); fillBg();
   g.setColor(TH.fg).setFontAlign(0,0);
+  var tm = e.vague ? (e.tod<0.5?"AM":"PM") : fmtClock(e.tod);
+  g.setFont("6x8",1).drawString(tm, 88, 22);
   var title = e.kind === "on" ? "PUT ON" : e.kind === "off" ? "TAKE OFF" : "TAKE";
   g.setFont("6x8",3).drawString(title, 88, 44);
   var mid = e.kind === "take" ? ((e.dose||"") + " mg") : (e.size ? e.size + " patch" : "patch");
@@ -239,7 +243,7 @@ function render() {
     var cf = (page === 2 || page === 3);
     g.setRotation(0);                                            // known state, then apply flip
     if (flipped && cf) g.setRotation(2);
-    g.clear(); g.setColor(TH.bg).fillRect(0,0,176,176);
+    g.clear(); fillBg();
     if (!D) { g.setColor("#ffffff").setFont("6x8",2).setFontAlign(0,0).drawString("no schedule\\ntransferred", 88, 88); return; }
     if (page === 0) drawClock();
     else if (page === 1) drawUpcoming();
@@ -260,7 +264,7 @@ function checkDue() {
     if (page !== 1) alertEv = n;
   }
 }
-function tick() { checkDue(); if (!Bangle.isLocked()) render(); }
+function tick() { try { checkDue(); } catch (e) {} if (!Bangle.isLocked()) render(); }
 function startTick() { if (!iv) iv = setInterval(tick, 20000); }
 function stopTick()  { if (iv) { clearInterval(iv); iv = null; } }
 
