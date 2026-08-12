@@ -17,10 +17,8 @@ var D = require("Storage").readJSON("pkpower.json", 1) || null;
 
 // Ruby-red theme: red background, everything else chosen to contrast on red.
 var TH = D ? D.theme : { bg:"#000000", e2:"#ff00ff", p4:"#00ffff", fg:"#ffffff", accent:"#ffff00" };
-// Whole-app 180 flip so the watch can be worn with the button on the OTHER side.
-// Uses the SAME g.setRotation the presentation flip already used — it rotates the display
-// AND the touch frame together — just applied as the default orientation.
-var FLIP_WORN = true;   // true = worn button-on-other-side (whole app 180). false = normal wear.
+// 180 flip: tapping the TOP or BOTTOM strip toggles it. Uses g.setRotation (rotates the
+// display AND touch together, under clock mode). The flip persists across pages and wake.
 
 function slotFromTable(tbl, cycle, pieceIdx) {
   if (pieceIdx < 0) return -1;
@@ -65,7 +63,7 @@ var MONS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","D
 var DAYS = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 
 function showErr(prefix, e) {
-  g.setRotation(FLIP_WORN ? 2 : 0); g.clear();
+  g.setRotation(flipped ? 2 : 0); g.clear();
   g.setColor("#ffffff").setFont("6x8",1).setFontAlign(-1,-1);
   var m = (e && e.message) ? e.message : (""+e), lines=[prefix], i;
   for (i=0;i<m.length;i+=28) lines.push(m.substr(i,28));
@@ -216,7 +214,7 @@ function drawSolar() {
 
 // ── dose alert (Bangle.js 2 has no speaker, so: buzz + a tappable card) ─
 function drawAlert(e) {
-  g.setRotation(FLIP_WORN ? 2 : 0); g.clear(); fillBg();
+  g.setRotation(flipped ? 2 : 0); g.clear(); fillBg();
   g.setColor(TH.fg).setFontAlign(0,0);
   var tm = e.vague ? (e.tod<0.5?"AM":"PM") : fmtClock(e.tod);
   g.setFont("6x8",1).drawString(tm, 88, 22);
@@ -237,11 +235,10 @@ function buzzFor(kind) {
 }
 
 function drawHints() {
-  if (flipped || alertEv) return;
+  if (alertEv) return;
   g.setColor(TH.fg).setFont("6x8",1);
-  g.setFontAlign(-1,0).drawString("<", 2, 96);
-  g.setFontAlign(1,0).drawString(">", 174, 96);
-  if (page === 2 || page === 3) g.setFontAlign(0,1).drawString("flip", 88, 175);
+  g.setFontAlign(-1,0).drawString("<", 2, 88);
+  g.setFontAlign(1,0).drawString(">", 174, 88);
 }
 
 // ── shell ────────────────────────────────────────────────────────────
@@ -287,16 +284,14 @@ try {
       if (!xy) return;
       if (Date.now() - lastTap < 90) return;
       lastTap = Date.now();
-      if (alertEv) { alertEv = null; render(); return; }         // any tap dismisses the dose card
-      if (flipped) { flipped = false; render(); return; }        // any tap un-flips presentation mode
-      var cf = (page === 2 || page === 3);
-      if (cf && xy.y > 130) { flipped = true; render(); return; }
-      if (xy.x < 88) page = (page + 3) % 4; else page = (page + 1) % 4;
+      if (alertEv) { alertEv = null; render(); return; }                        // dismiss the dose card
+      if (xy.y < 44 || xy.y > 132) { flipped = !flipped; render(); return; }     // TOP or BOTTOM = toggle 180 flip
+      if (xy.x < 88) page = (page + 3) % 4; else page = (page + 1) % 4;          // middle band: left=prev, right=next
       render();
     });
     Bangle.on("lock", function(on){                              // wake -> clock, refresh steps
       if (on) { stopTick(); return; }
-      page = 0; flipped = false; _stT = 0; render(); startTick();
+      page = 0; _stT = 0; render(); startTick();
     });
     Bangle.on("step", function(){                                // live steps while walking — even when locked (v2 screen is always on)
       var t = Date.now();
@@ -308,8 +303,6 @@ try {
     startTick();
   }
   g.reset(); render();
-  setTimeout(render, 400);    // re-apply the base 180 flip after clock-mode init settles
-  setTimeout(render, 1200);
 } catch (e) {
   showErr("init error:", e);
 }
