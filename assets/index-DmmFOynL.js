@@ -18,13 +18,9 @@ var D = require("Storage").readJSON("pkpower.json", 1) || null;
 // Ruby-red theme: red background, everything else chosen to contrast on red.
 var TH = D ? D.theme : { bg:"#000000", e2:"#ff00ff", p4:"#00ffff", fg:"#ffffff", accent:"#ffff00" };
 // Whole-app 180 flip so the watch can be worn with the button on the OTHER side.
-// g.setRotation under clock mode flips only my touch math, NOT the display, so flip at the
-// LCD controller (reliable, forum-proven) and remap touch in software to match.
-var BASE_FLIP = true;   // true = worn button-on-other-side (display upside down). false = normal wear.
-var _curFlip = null;
-function lcdFlip(on){ try { Bangle.lcdWr(0x36, on ? 0xC0 : 0x00); } catch(e){} }
-function effFlip(){ var cf=(page===2||page===3); var e=BASE_FLIP; if (flipped && cf) e=!e; return e; }
-function applyFlip(){ var e=effFlip(); if (e!==_curFlip){ lcdFlip(e); _curFlip=e; } return e; }
+// Uses the SAME g.setRotation the presentation flip already used — it rotates the display
+// AND the touch frame together — just applied as the default orientation.
+var FLIP_WORN = true;   // true = worn button-on-other-side (whole app 180). false = normal wear.
 
 function slotFromTable(tbl, cycle, pieceIdx) {
   if (pieceIdx < 0) return -1;
@@ -69,7 +65,7 @@ var MONS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","D
 var DAYS = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 
 function showErr(prefix, e) {
-  g.setRotation(0); g.clear();
+  g.setRotation(FLIP_WORN ? 2 : 0); g.clear();
   g.setColor("#ffffff").setFont("6x8",1).setFontAlign(-1,-1);
   var m = (e && e.message) ? e.message : (""+e), lines=[prefix], i;
   for (i=0;i<m.length;i+=28) lines.push(m.substr(i,28));
@@ -218,7 +214,7 @@ function drawSolar() {
 
 // ── dose alert (Bangle.js 2 has no speaker, so: buzz + a tappable card) ─
 function drawAlert(e) {
-  g.setRotation(0); g.clear(); fillBg();
+  g.setRotation(FLIP_WORN ? 2 : 0); g.clear(); fillBg();
   g.setColor(TH.fg).setFontAlign(0,0);
   var tm = e.vague ? (e.tod<0.5?"AM":"PM") : fmtClock(e.tod);
   g.setFont("6x8",1).drawString(tm, 88, 22);
@@ -280,26 +276,21 @@ function stopTick()  { if (iv) { clearInterval(iv); iv = null; } }
 
 try {
   if (D) {
+    if (Bangle.setUI) Bangle.setUI({ mode: "clock" });
     var lastTap = 0;
-    var onTouch = function(z, xy){
+    // Raw touch coords: g.setRotation(2) rotates the touch frame WITH the display, so when
+    // worn-flipped a tap already arrives in the flipped frame — no manual remap needed.
+    Bangle.on("touch", function(z, xy){
       if (!xy) return;
       if (Date.now() - lastTap < 90) return;
       lastTap = Date.now();
-      var cf = (page === 2 || page === 3);
-      var e = BASE_FLIP; if (flipped && cf) e = !e;
-      var x = xy.x, y = xy.y;
-      if (e) { x = 176 - x; y = 176 - y; }                       // physical tap -> flipped logical frame
       if (alertEv) { alertEv = null; render(); return; }         // any tap dismisses the dose card
-      if (flipped) { flipped = false; render(); return; }
-      if (cf && y > 130) { flipped = true; render(); return; }
-      if (x < 88) page = (page + 3) % 4; else page = (page + 1) % 4;
+      if (flipped) { flipped = false; render(); return; }        // any tap un-flips presentation mode
+      var cf = (page === 2 || page === 3);
+      if (cf && xy.y > 130) { flipped = true; render(); return; }
+      if (xy.x < 88) page = (page + 3) % 4; else page = (page + 1) % 4;
       render();
-    };
-    // Managed input via setUI: clock:1 keeps button->launcher + wake behavior, and
-    // OUR touch handler owns taps (mixing clock-mode with a raw Bangle.on("touch")
-    // let the two fight over taps — a likely cause of the mid-scroll blanking).
-    if (Bangle.setUI) Bangle.setUI({ mode: "custom", clock: 1, touch: onTouch, remove: function(){ stopTick(); } });
-    else Bangle.on("touch", onTouch);
+    });
     Bangle.on("lock", function(on){                              // wake -> clock, refresh steps
       if (on) { stopTick(); return; }
       page = 0; flipped = false; _stT = 0; _evT = 0; render(); startTick();
